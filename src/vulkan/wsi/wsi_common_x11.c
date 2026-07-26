@@ -443,6 +443,12 @@ wsi_x11_get_connection(struct wsi_device *wsi_dev,
    return entry->data;
 }
 
+// WARNING: this is the primary image format list
+// When blitting, we CANNOT advertise R8G8B8A8 as the secondary
+// image expects the physical layout order of the primary image
+// to ALWAYS be B8G8R8A8_UNORM, regardless of the advertised format.
+// Until we can swizzle+copy the image (and we cannot use a vkCmdBlitImage)
+// we must always advertise B8G8R8A8_UNORM as the primary image format.
 static const VkFormat formats[] = {
    VK_FORMAT_R5G6B5_UNORM_PACK16,
    VK_FORMAT_B8G8R8A8_SRGB,
@@ -903,10 +909,21 @@ x11_surface_get_formats(VkIcdSurfaceBase *surface,
    if (!get_sorted_vk_formats(surface, wsi_device, sorted_formats, &count))
       return VK_ERROR_SURFACE_LOST_KHR;
 
-   for (unsigned i = 0; i < count; i++) {
+   if (wsi_device->emulate_bgra8) {
       vk_outarray_append_typed(VkSurfaceFormatKHR, &out, f) {
-         f->format = sorted_formats[i];
+         f->format = VK_FORMAT_B8G8R8A8_UNORM;
          f->colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+      }
+      vk_outarray_append_typed(VkSurfaceFormatKHR, &out, f) {
+         f->format = VK_FORMAT_B8G8R8A8_SRGB;
+         f->colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+      }
+   } else {
+      for (unsigned i = 0; i < count; i++) {
+         vk_outarray_append_typed(VkSurfaceFormatKHR, &out, f) {
+            f->format = sorted_formats[i];
+            f->colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+         }
       }
    }
 
@@ -928,11 +945,24 @@ x11_surface_get_formats2(VkIcdSurfaceBase *surface,
    if (!get_sorted_vk_formats(surface, wsi_device, sorted_formats, &count))
       return VK_ERROR_SURFACE_LOST_KHR;
 
-   for (unsigned i = 0; i < count; i++) {
+   if (wsi_device->emulate_bgra8) {
       vk_outarray_append_typed(VkSurfaceFormat2KHR, &out, f) {
          assert(f->sType == VK_STRUCTURE_TYPE_SURFACE_FORMAT_2_KHR);
-         f->surfaceFormat.format = sorted_formats[i];
+         f->surfaceFormat.format = VK_FORMAT_B8G8R8A8_UNORM;
          f->surfaceFormat.colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+      }
+      vk_outarray_append_typed(VkSurfaceFormat2KHR, &out, f) {
+         assert(f->sType == VK_STRUCTURE_TYPE_SURFACE_FORMAT_2_KHR);
+         f->surfaceFormat.format = VK_FORMAT_B8G8R8A8_SRGB;
+         f->surfaceFormat.colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+      }
+   } else {
+      for (unsigned i = 0; i < count; i++) {
+         vk_outarray_append_typed(VkSurfaceFormat2KHR, &out, f) {
+            assert(f->sType == VK_STRUCTURE_TYPE_SURFACE_FORMAT_2_KHR);
+            f->surfaceFormat.format = sorted_formats[i];
+            f->surfaceFormat.colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+         }
       }
    }
 

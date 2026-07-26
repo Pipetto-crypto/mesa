@@ -313,8 +313,10 @@ VkResult enumerate_physical_device(struct vk_instance *_instance)
       else
          pdevice->dma_heap_fd = open("/dev/dma_heap/system-uncached", O_RDONLY | O_CLOEXEC);
          
-      if (pdevice->dma_heap_fd < 0)
+      if (pdevice->dma_heap_fd < 0) {
+         WRAPPER_LOG("info", "dmabuf heap not found, falling back to /dev/ion");
          pdevice->dma_heap_fd = open("/dev/ion", O_RDONLY);
+      }
 
       char *wrapper_resource_type = getenv("WRAPPER_RESOURCE_TYPE");
 
@@ -758,4 +760,4 @@ wrapper_GetPhysicalDeviceMemoryProperties2(VkPhysicalDevice physicalDevice,
 
    if (wrapper_vmem_max_size > 0)
       pMemoryProperties->memoryProperties.memoryHeaps[0].size = (VkDeviceSize)wrapper_vmem_max_size * 1048576;
-}								
+}

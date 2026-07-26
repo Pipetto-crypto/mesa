@@ -119,9 +119,32 @@ wsi_device_init(struct wsi_device *wsi,
       .pNext = &pddp,
    };
    GetPhysicalDeviceProperties2(pdevice, &wsi->properties2);
-   
-   if (pddp.driverID == VK_DRIVER_ID_ARM_PROPRIETARY)
-      wsi->needs_blit = true;
+
+   const char *wine_preload_reserve = getenv("WINEPRELOADRESERVE"); // e.g. 000400000-0008b4000 or 140000000-1400a8000
+   bool is_win32 = false;
+
+   if (wine_preload_reserve && *wine_preload_reserve) {
+       char *end_ptr = NULL;
+       uint64_t base_addr = strtoull(wine_preload_reserve, &end_ptr, 16);
+
+       if (end_ptr != wine_preload_reserve) {
+           is_win32 = (base_addr < 0xFFFFFFFFULL);
+       }
+   }
+
+   WRAPPER_LOG(info, "is_win32=%d, WINEPRELOADRESERVE=%s",
+      is_win32, wine_preload_reserve ? wine_preload_reserve : "nullptr");
+
+   static int emulate_bgra8 = -1;
+   if (emulate_bgra8 == -1) {
+      // TODO(leegao): enable generally for all Mali devices (enables direct rendering on Mali)
+      bool is_mali_win32 = pddp.driverID == VK_DRIVER_ID_ARM_PROPRIETARY && is_win32;
+      emulate_bgra8 = getenv("WRAPPER_EMULATE_BGRA8") ? atoi(getenv("WRAPPER_EMULATE_BGRA8")) : is_mali_win32;
+      int dont_emulate_bgra8 = getenv("WRAPPER_DONT_EMULATE_BGRA8") ? atoi(getenv("WRAPPER_DONT_EMULATE_BGRA8")) : 0;
+      if (dont_emulate_bgra8) emulate_bgra8 = 0;
+   }
+
+   wsi->emulate_bgra8 = emulate_bgra8;
 
    wsi->maxImageDimension2D = wsi->properties2.properties.limits.maxImageDimension2D;
    assert(wsi->properties2.properties.limits.optimalBufferCopyRowPitchAlignment <= UINT32_MAX);
@@ -666,6 +689,15 @@ wsi_configure_image(const struct wsi_swapchain *chain,
       .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
    };
 
+   if (chain->wsi->emulate_bgra8) {
+      // TODO(leegao): actually add the convertible formats
+      // The WSI emulation on x11 will still attach an ImageView for bgra8
+      // but Mali can only support direct rendering on rgba8
+      // This is a workaround so WSI can vkCreateImageView of bgra8 views
+      // over physical rgba8 vkImages backed by an AHB on Mali
+      info->create.flags |= VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
+   }
+
    if (handle_types != 0) {
       info->ext_mem = (VkExternalMemoryImageCreateInfo) {
          .sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO,
@@ -1051,6 +1083,16 @@ wsi_CreateSwapchainKHR(VkDevice _device,
      alloc = &device->alloc;
 
    VkSwapchainCreateInfoKHR info = *pCreateInfo;
+
+   if (wsi_device->emulate_bgra8) {
+      if (info.imageFormat == VK_FORMAT_B8G8R8A8_UNORM) {
+         WRAPPER_LOG(info, "wsi_CreateSwapchainKHR: Emulating B8G8R8A8_UNORM framebuffers on Mali");
+         info.imageFormat = VK_FORMAT_R8G8B8A8_UNORM;
+      } else if (info.imageFormat == VK_FORMAT_B8G8R8A8_SRGB) {
+         WRAPPER_LOG(info, "wsi_CreateSwapchainKHR: Emulating B8G8R8A8_UNORM framebuffers on Mali");
+         info.imageFormat = VK_FORMAT_R8G8B8A8_SRGB;
+      }
+   }
 
    if (wsi_device->force_swapchain_to_currentExtent) {
       VkSurfaceCapabilities2KHR caps2 = {

@@ -2,9 +2,11 @@
 #include "wsi_common_private.h"
 #include "vk_log.h"
 #include "../wrapper/wrapper_log.h"
+#include "../wrapper/wrapper_private.h"
 
 #include <android/hardware_buffer.h>
 
+#define AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM 1
 #define AHARDWAREBUFFER_FORMAT_B8G8R8A8_UNORM 5
 
 static enum wsi_swapchain_blit_type
@@ -13,12 +15,15 @@ wsi_get_ahardware_buffer_blit_type(const struct wsi_device *wsi,
 {
    AHardwareBuffer *ahardware_buffer;
    VkResult result;
+   uint32_t probe_format = wsi->emulate_bgra8
+         ? AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM
+         : AHARDWAREBUFFER_FORMAT_B8G8R8A8_UNORM;
    
    if (AHardwareBuffer_allocate(&(AHardwareBuffer_Desc){
       .width = 500,
       .height = 500,
       .layers = 1,
-      .format = AHARDWAREBUFFER_FORMAT_B8G8R8A8_UNORM,
+      .format = probe_format,
       .usage = AHARDWAREBUFFER_USAGE_GPU_FRAMEBUFFER |
                AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE |
                AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN |
@@ -83,6 +88,7 @@ wsi_get_ahardware_buffer_blit_type(const struct wsi_device *wsi,
       return WSI_SWAPCHAIN_IMAGE_BLIT;
    }
 
+   WRAPPER_LOG(info, "wsi_get_ahardware_buffer_blit_type: WSI_SWAPCHAIN_NO_BLIT");
    return WSI_SWAPCHAIN_NO_BLIT;
 }
 
@@ -129,10 +135,18 @@ wsi_create_ahardware_buffer_image_mem(const struct wsi_swapchain *chain,
    }
 
    VkImageCreateInfo new_image_create_info = info->create;
-   if (ahardware_buffer_format_props.externalFormat)
+   if (ahardware_buffer_format_props.externalFormat && !wsi->emulate_bgra8)
       new_image_create_info.flags &=
          ~VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
    new_image_create_info.format = ahardware_buffer_format_props.format;
+
+   VkEmulatedB8G8R8A8CreateInfoExt emulated_bgra8_ext = {
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EMULATED_B8G8R8A8_CREATE_INFO_EXT,
+      .pNext = new_image_create_info.pNext,
+   };
+   if (wsi->emulate_bgra8) {
+      new_image_create_info.pNext = &emulated_bgra8_ext;
+   }
 
    result = wsi->CreateImage(chain->device,
                              &new_image_create_info,
@@ -302,6 +316,9 @@ wsi_create_ahardware_buffer_blit_context(const struct wsi_swapchain *chain,
 inline static uint32_t
 to_ahardware_buffer_format(VkFormat format) {
    switch (format) {
+   case VK_FORMAT_R8G8B8A8_SRGB:
+   case VK_FORMAT_R8G8B8A8_UNORM:
+      return AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM;
    case VK_FORMAT_B8G8R8A8_SRGB:
    case VK_FORMAT_B8G8R8A8_UNORM:
       return AHARDWAREBUFFER_FORMAT_B8G8R8A8_UNORM;
@@ -336,7 +353,20 @@ wsi_configure_ahardware_buffer_image(const struct wsi_swapchain *chain,
       wsi_destroy_image_info(chain, info);
       return VK_ERROR_OUT_OF_HOST_MEMORY;
    }
-   
+
+   // WARNING: The secondary AHB MUST be declared as AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM
+   // to allow certain mobile drivers to import it, but X11 treats its memory backing
+   // as physical [B, G, R, A] (in reverse order).
+   //
+   // We CANNOT use vkCmdBlitImage: Vulkan will detect the format mismatch between
+   // B8G8R8A8 (primary) and R8G8B8A8 (secondary) and perform an automatic channel swizzle
+   // [B,G,R,A] -> [R,G,B,A], which breaks X11's expected layout.
+   //
+   // We MUST use vkCmdCopyImage for a pure bitwise copy, and force the primary image
+   // to B8G8R8A8 upfront so the rendered memory is already in [B, G, R, A] order.
+   //
+   // Similarly, we CANNOT advertise an [R,G,B,A] format for the primary image without
+   // a design to copy+swizzle the blit from the primary to the secondary.
    *info->ahardware_buffer_desc = (AHardwareBuffer_Desc) {
       .width = pCreateInfo->imageExtent.width,
       .height = pCreateInfo->imageExtent.height,
@@ -382,4 +412,3 @@ wsi_configure_android_image(
 
    return VK_SUCCESS;
 }
-

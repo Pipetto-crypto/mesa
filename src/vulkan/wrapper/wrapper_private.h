@@ -14,7 +14,6 @@
 #include "vulkan/wsi/wsi_common.h"
 #include "util/simple_mtx.h"
 #include "util/hash_table.h"
-#include "adrenotools/driver.h"
 
 extern const struct vk_instance_extension_table wrapper_instance_extensions;
 extern const struct vk_device_extension_table wrapper_device_extensions;
@@ -92,7 +91,20 @@ struct wrapper_buffer {
    int is_mapped;
    VkDeviceMemory memory;
    struct wrapper_command_buffer *wcb;
+   VkExternalMemoryHandleTypeFlags handle_types;
 };
+
+struct wrapper_buffer *
+get_wrapper_buffer_from_handle_locked(struct wrapper_device *device, VkBuffer buffer);
+
+struct wrapper_buffer *
+get_wrapper_buffer_from_handle(struct wrapper_device *device, VkBuffer buffer);
+
+#define VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EMULATED_B8G8R8A8_CREATE_INFO_EXT 1000701234
+typedef struct VkEmulatedB8G8R8A8CreateInfoExt {
+    VkStructureType          sType;
+    const void*              pNext;
+} VkEmulatedB8G8R8A8CreateInfoExt;
 
 struct wrapper_image {
    struct vk_image vk;
@@ -101,7 +113,17 @@ struct wrapper_image {
    struct list_head link;
    VkImage dispatch_handle;
    VkImageCreateInfo info;
+
+   bool is_emulated_bgra8;
+   bool is_wsi_image;
+   VkExternalMemoryHandleTypeFlags handle_types;
 };
+
+struct wrapper_image *
+get_wrapper_image_from_handle_locked(struct wrapper_device *device, VkImage image);
+
+struct wrapper_image *
+get_wrapper_image_from_handle(struct wrapper_device *device, VkImage image);
 
 struct wrapper_fence {
 	struct vk_fence vk;

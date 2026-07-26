@@ -1,0 +1,38 @@
+name: Termux-Build of Mesa Vulkan Wrapper
+
+on: [push, pull_request]
+
+jobs:
+  build-aarch64-wrapper:
+    runs-on: ubuntu-latest
+
+    env:
+      BUILD_DIR: build
+      IMAGE_TAG: ghcr.io/leegao/mesa-wrapper-ci/wrapper-compiler:latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: wrapper-compiler
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/workspace" ${{ env.IMAGE_TAG }} ${{ env.BUILD_DIR }}
+
+      - name: Upload Stripped libvulkan_wrapper.so
+        uses: actions/upload-artifact@v4
+        with:
+          name: libvulkan_wrapper
+          path: |
+            ${{ env.BUILD_DIR }}/libvulkan_wrapper.so
+          if-no-files-found: error
+          
+      - name: Upload Unstripped libvulkan_wrapper.so
+        uses: actions/upload-artifact@v4
+        with:
+          name: libvulkan_wrapper-unstripped
+          path: |
+            ${{ env.BUILD_DIR }}/libvulkan_wrapper.so.unstripped
+          if-no-files-found: error
